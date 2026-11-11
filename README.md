@@ -9,7 +9,8 @@ Base: `linux-msft-wsl-6.18.58.1` (WSL 3.0.5). One patch: `mm/pagecache_limit.c`,
 
 ## Why
 
-WSL drops guest cache only when CPU usage stays below 0.5% for 2 minutes
+Even with `autoMemoryReclaim=dropCache` (the default and most aggressive mode), WSL
+drops guest cache only when CPU usage stays below 0.5% for 2 minutes
 ([WSL maintainer, 2026-11-03](https://github.com/microsoft/WSL/issues/42123#issuecomment-6595332515)).
 Under sustained load (training, builds, data processing) that never happens. The guest
 is not under memory pressure, so it keeps file pages it no longer uses, and all of them
