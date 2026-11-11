@@ -130,7 +130,9 @@ hung-task reports.
 | Case | Result |
 |---|---|
 | limits off vs 6.18.40.1 without the patch (`perf bench`, median of 3) | syscall 0.124 → 0.123 µs/op, sched messaging 1.314 → 1.346 s |
-| hook cost, RAM-backed (ext4 on loop on tmpfs, 2 GiB cold read, 7 interleaved runs) | off 10716, enabled below limit 11865, soft exceeded 11703, hard exceeded 9057 MB/s |## Notes
+| hook cost, RAM-backed (ext4 on loop on tmpfs, 2 GiB cold read, 7 interleaved runs) | off 10716, enabled below limit 11865, soft exceeded 11703, hard exceeded 9057 MB/s |
+
+## Notes
 
 - **Total cache bound:** total cache is bounded by `hard_limit + vm.dirty_bytes`;
   heavy writeback can overshoot the clean limit briefly.
