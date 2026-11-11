@@ -9,14 +9,14 @@ Base: `linux-msft-wsl-6.18.58.1` (WSL 3.0.5). One patch: `mm/pagecache_limit.c`,
 
 ## Why
 
-WSL's `autoMemoryReclaim` releases guest cache only after CPU usage has stayed low for
-5 minutes ([WSL blog](https://devblogs.microsoft.com/commandline/windows-subsystem-for-linux-september-2023-update/)).
-Under sustained load (training, builds, data processing) the guest keeps file pages it
-no longer uses, because it still has free memory, and all of them stay committed in
-`vmmemWSL`. Stale cache then creates memory pressure on the host. Same problem as
-[microsoft/WSL#42123](https://github.com/microsoft/WSL/issues/42123), which is marked
-by-design. This patch bounds the guest page cache while the workload runs instead of
-waiting for idle.
+WSL drops guest cache only when CPU usage stays below 0.5% for 2 minutes
+([WSL maintainer, 2026-11-03](https://github.com/microsoft/WSL/issues/42123#issuecomment-6595332515)).
+Under sustained load (training, builds, data processing) that never happens. The guest
+is not under memory pressure, so it keeps file pages it no longer uses, and all of them
+stay committed in `vmmemWSL`: stale cache becomes memory pressure on the host. Same
+problem as [microsoft/WSL#42123](https://github.com/microsoft/WSL/issues/42123)
+(labeled by-design). This patch bounds the guest page cache while the workload runs
+instead of waiting for idle.
 
 ## Limits
 
