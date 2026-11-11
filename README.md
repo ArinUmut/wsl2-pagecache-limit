@@ -129,10 +129,8 @@ hung-task reports.
 
 | Case | Result |
 |---|---|
-| limits off vs 6.18.40.1 without the patch (fio, median of 3) | seqread 4859 → 5244 MB/s, randread 23035 → 23519 IOPS, seqwrite 509 → 534 MB/s, syscall 0.124 → 0.123 µs, sched messaging 1.314 → 1.346 s |
-| hook cost, RAM-backed (ext4 on loop on tmpfs, 2 GiB cold read, 7 interleaved runs) | off 10716, enabled below limit 11865, soft exceeded 11703, hard exceeded 9057 MB/s |
-| VHDX A/B, 5 interleaved rounds | dominated by host-side variance (85–996 MB/s writes in one session); paired on/off median ratio: read 1.58, write 1.05 |
-## Notes
+| limits off vs 6.18.40.1 without the patch (`perf bench`, median of 3) | syscall 0.124 → 0.123 µs/op, sched messaging 1.314 → 1.346 s |
+| hook cost, RAM-backed (ext4 on loop on tmpfs, 2 GiB cold read, 7 interleaved runs) | off 10716, enabled below limit 11865, soft exceeded 11703, hard exceeded 9057 MB/s |## Notes
 
 - **Total cache bound:** total cache is bounded by `hard_limit + vm.dirty_bytes`;
   heavy writeback can overshoot the clean limit briefly.

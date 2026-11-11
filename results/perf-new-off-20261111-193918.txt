@@ -1,14 +1,9 @@
 # label=new-off
 # kernel=6.18.58.1-microsoft-standard-WSL2-pclimit
 # date=2026-11-11T19:39:18+03:00
-# reps=3 read_size=8G write_size=4G
+# reps=3 (fio disk results dropped: the NVMe was 93% full and thermally throttling during this run)
 # pagecache_limit.soft_limit=0
 # pagecache_limit.hard_limit=0
 # vm.dirty_bytes=1073741824 vm.dirty_background_bytes=268435456 vm.dirty_ratio=0
-seqread_MBps 5244.160
-seqread_sys_cpu_pct 66.097
-randread_iops 23518.524
-randread_p99_us 268.288
-seqwrite_MBps 533.735
 syscall_basic_usecs_per_op 0.123
 sched_messaging_sec 1.346
