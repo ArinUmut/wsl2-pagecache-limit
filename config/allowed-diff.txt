@@ -1,0 +1,36 @@
+# Symbols allowed to differ between Microsoft/config-wsl and the release
+# .config (scripts/build.sh fails on any other difference). Review the reason
+# before adding a line.
+#
+# Our choices (config/pclimit.fragment) and what they select:
+LOCALVERSION
+KVM
+KVM_X86
+KVM_AMD
+HAVE_KVM_IRQ_BYPASS
+IRQ_BYPASS_MANAGER
+VHOST
+VHOST_IOTLB
+VHOST_VSOCK
+VIRTIO_VSOCKETS_COMMON
+GCC_PLUGIN_LATENT_ENTROPY
+#
+# Toolchain probes (Microsoft builds with gcc 13.2.0, we build with the
+# distro gcc/binutils/rustc):
+CC_VERSION_TEXT
+GCC_VERSION
+AS_VERSION
+LD_VERSION
+RUSTC_VERSION
+RUSTC_LLVM_VERSION
+CC_HAS_ASM_GOTO_OUTPUT
+CC_HAS_ASM_GOTO_TIED_OUTPUT
+GCC_ASM_GOTO_OUTPUT_BROKEN
+#
+# Present in a plain `olddefconfig` of config-wsl at linux-msft-wsl-6.18.58.1
+# without any fragment (config-wsl is not fully normalised for this tree):
+CRYPTO_CAMELLIA
+CRYPTO_KRB5
+CRYPTO_KRB5ENC
+CRYPTO_KRB5_SELFTESTS
+RPCSEC_GSS_KRB5_ENCTYPES_CAMELLIA

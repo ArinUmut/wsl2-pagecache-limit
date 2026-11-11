@@ -1,0 +1,14 @@
+# label=new-on-3G-4G
+# kernel=6.18.58.1-microsoft-standard-WSL2-pclimit
+# date=2026-11-11T19:40:59+03:00
+# reps=3 read_size=8G write_size=4G
+# pagecache_limit.soft_limit=3221225472
+# pagecache_limit.hard_limit=4294967296
+# vm.dirty_bytes=1073741824 vm.dirty_background_bytes=268435456 vm.dirty_ratio=0
+seqread_MBps 2830.291
+seqread_sys_cpu_pct 33.922
+randread_iops 22250.337
+randread_p99_us 276.480
+seqwrite_MBps 183.970
+syscall_basic_usecs_per_op 0.123
+sched_messaging_sec 1.355

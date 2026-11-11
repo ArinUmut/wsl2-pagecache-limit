@@ -1,0 +1,3 @@
+/.cache/
+/out/
+/tests/validate.local.sh

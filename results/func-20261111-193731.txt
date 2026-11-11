@@ -1,0 +1,22 @@
+# kernel=6.18.58.1-microsoft-standard-WSL2-pclimit soft=3221225472 hard=4294967296 date=2026-11-11T19:37:32+03:00
+10G read: peak_file_kb=3145996 peak_clean_kb=3145932 secs=2.76 bytes=10737418240
+PASS peak clean 3145932 kB <= hard + 64M
+PASS settled under soft: 3072356 kB after 0.0 s
+sync_calls +0, async_reclaimed_pages +1894444, pgsteal_file +1894442
+PASS drvfs 1G read: peak_file_kb=145512 peak_clean_kb=145412 secs=3.58 bytes=1073741824
+== stats
+file_bytes 149807104
+clean_bytes 149704704
+peak_file_bytes 3225681920
+effective_soft_bytes 3221225472
+hard_bytes 4294967296
+sync_calls 0
+sync_reclaimed_pages 0
+sync_short 0
+skip_context 0
+skip_backoff 0
+skip_cgroup_v1 0
+async_wakeups 148
+async_reclaimed_pages 4141191
+async_stuck 0
+RESULT ok

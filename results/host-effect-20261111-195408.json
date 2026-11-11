@@ -1,0 +1,28 @@
+[
+  {
+    "mode": "off",
+    "soft": "0",
+    "hard": "0",
+    "before_ws_mb": 1326.0,
+    "peak_ws_mb": 12784.0,
+    "end_ws_mb": 12792.0,
+    "after30s_ws_mb": 10029.0,
+    "before_priv_mb": 2194.0,
+    "peak_priv_mb": 12963.0,
+    "after30s_priv_mb": 12817.0,
+    "read": "peak_file_kb=11839628 peak_clean_kb=11836388 secs=3.6445 bytes=10737418240"
+  },
+  {
+    "mode": "on",
+    "soft": "3221225472",
+    "hard": "4294967296",
+    "before_ws_mb": 2254.0,
+    "peak_ws_mb": 4533.0,
+    "end_ws_mb": 4533.0,
+    "after30s_ws_mb": 1820.0,
+    "before_priv_mb": 2331.0,
+    "peak_priv_mb": 4838.0,
+    "after30s_priv_mb": 4361.0,
+    "read": "peak_file_kb=3152788 peak_clean_kb=3150064 secs=2.1172 bytes=10737418240"
+  }
+]

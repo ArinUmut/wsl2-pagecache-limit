@@ -1,0 +1,12 @@
+# label=baseline-6.18.40.1
+# kernel=6.18.40.1-microsoft-standard-WSL2+
+# date=2026-11-11T18:24:11+03:00
+# reps=3 read_size=8G write_size=4G
+# vm.dirty_bytes=0 vm.dirty_background_bytes=0 vm.dirty_ratio=20
+seqread_MBps 4858.560
+seqread_sys_cpu_pct 74.420
+randread_iops 23035.248
+randread_p99_us 264.192
+seqwrite_MBps 509.305
+syscall_basic_usecs_per_op 0.124
+sched_messaging_sec 1.314

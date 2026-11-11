@@ -1,0 +1,6 @@
+# kernel=6.18.58.1-microsoft-standard-WSL2-pclimit soft=0 hard=4294967296 dirty_bytes=1073741824 date=2026-11-11T19:38:57+03:00
+hard-only 10G read: peak_file_kb=4196736 peak_clean_kb=4196484 secs=2.40 bytes=10737418240
+  sync_calls +1567, sync_reclaimed_pages +808240
+PASS peak clean 4196484 kB <= hard + 64M
+hard-only 6G write + sync: peak_file_kb=4944452 peak_clean_kb=4308412 secs=6.04 bytes=6442450944
+PASS clean back under hard + 64M (4193712 kB) 0.0 s after sync

@@ -1,0 +1,719 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ArinUmut <arinumutg@gmail.com>
+Date: Wed, 11 Nov 2026 18:36:05 +0300
+Subject: [PATCH] mm: add a global page cache limit with async and sync reclaim
+
+In a WSL2 guest every page the kernel touches stays committed in the
+host's vmmem process, so a page cache that grows to most of the VM size
+turns into memory pressure on the Windows host.  Add a limit on the file
+LRUs that is independent of the total memory size.
+
+Two limits, both off by default and usable alone or together:
+
+  soft_limit  kpclimitd reclaims file pages in the background once the
+              file LRUs grow past the limit, down to a little below it.
+  hard_limit  while clean page cache is above the limit, a task adding
+              folios to the page cache first reclaims about as many file
+              pages as it adds (the memory.max model, file pages only).
+
+The hook sits at the top of filemap_add_folio(), where the folio is not
+yet locked or visible and memcg already reclaims for memory.max with the
+same gfp mask.  It is a static branch, so it costs a patched-out jump
+while no limit is set; when enabled it reads the global counters only
+every 64 pages per CPU.
+
+Reclaim is try_to_free_mem_cgroup_pages() on root_mem_cgroup without
+MEMCG_RECLAIM_MAY_SWAP (get_scan_count() then scans file LRUs only) and
+with MEMCG_RECLAIM_PROACTIVE (no vmpressure side effects), wrapped in
+psi_memstall and fs_reclaim annotations like page allocator reclaim.
+
+The hard limit is best effort and never fails an allocation:
+ - dirty and writeback pages are excluded (direct reclaim cannot write
+   them back);
+ - non-blocking, NOFAIL, NOIO, PF_MEMALLOC, kthread, dying-task and
+   dropbehind insertions skip it and only wake the worker;
+ - reclaim is skipped on cgroup v1 (no writeback throttling there);
+ - inserters only reclaim what they add, and writeback turns dirty
+   pages clean without any insertion, so while the file LRUs (dirty
+   pages included) are above the hard limit the worker keeps watching:
+   it re-checks every HZ/4, and inserters that see clean excess still
+   wake it at once;
+ - a call that reclaims less than half its target arms a 20 ms back-off
+   that doubles up to 1 s, so unreclaimable cache is not rescanned on
+   every insertion.  The worker backs off the same way (HZ/4 to 8 s).
+
+Interface: built-in module parameters pagecache_limit.soft_limit= and
+pagecache_limit.hard_limit= (bytes, K/M/G/T suffix, 0 = off, >= 64M
+otherwise) on the command line and under
+/sys/module/pagecache_limit/parameters/, plus a read-only "stats" file.
+Command line values are stored and applied by a late initcall, once the
+memcg root exists.
+---
+ include/linux/pagecache_limit.h |  36 ++
+ mm/Makefile                     |   1 +
+ mm/filemap.c                    |   2 +
+ mm/pagecache_limit.c            | 580 ++++++++++++++++++++++++++++++++
+ 4 files changed, 619 insertions(+)
+ create mode 100644 include/linux/pagecache_limit.h
+ create mode 100644 mm/pagecache_limit.c
+
+diff --git a/include/linux/pagecache_limit.h b/include/linux/pagecache_limit.h
+new file mode 100644
+index 000000000..85273e761
+--- /dev/null
++++ b/include/linux/pagecache_limit.h
+@@ -0,0 +1,36 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _LINUX_PAGECACHE_LIMIT_H
++#define _LINUX_PAGECACHE_LIMIT_H
++
++#include <linux/jump_label.h>
++#include <linux/types.h>
++
++struct address_space;
++struct folio;
++
++#ifdef CONFIG_MEMCG
++DECLARE_STATIC_KEY_FALSE(pagecache_limit_key);
++
++void __pagecache_limit_charge(struct address_space *mapping,
++			      struct folio *folio, gfp_t gfp);
++
++/*
++ * Called by filemap_add_folio() for every folio that enters the page cache,
++ * before the folio is charged, locked or inserted, with the gfp mask of the
++ * insertion.  Compiles to a patched-out jump unless a limit is set
++ * (see mm/pagecache_limit.c).
++ */
++static inline void pagecache_limit_charge(struct address_space *mapping,
++					  struct folio *folio, gfp_t gfp)
++{
++	if (static_branch_unlikely(&pagecache_limit_key))
++		__pagecache_limit_charge(mapping, folio, gfp);
++}
++#else
++static inline void pagecache_limit_charge(struct address_space *mapping,
++					  struct folio *folio, gfp_t gfp)
++{
++}
++#endif
++
++#endif /* _LINUX_PAGECACHE_LIMIT_H */
+diff --git a/mm/Makefile b/mm/Makefile
+index 21abb3353..c47d4239b 100644
+--- a/mm/Makefile
++++ b/mm/Makefile
+@@ -102,6 +102,7 @@ obj-$(CONFIG_TRANSPARENT_HUGEPAGE) += huge_memory.o khugepaged.o
+ obj-$(CONFIG_PAGE_COUNTER) += page_counter.o
+ obj-$(CONFIG_MEMCG_V1) += memcontrol-v1.o
+ obj-$(CONFIG_MEMCG) += memcontrol.o vmpressure.o
++obj-$(CONFIG_MEMCG) += pagecache_limit.o
+ ifdef CONFIG_SWAP
+ obj-$(CONFIG_MEMCG) += swap_cgroup.o
+ endif
+diff --git a/mm/filemap.c b/mm/filemap.c
+index 1a0358810..6c6facdb7 100644
+--- a/mm/filemap.c
++++ b/mm/filemap.c
+@@ -48,6 +48,7 @@
+ #include <linux/rcupdate_wait.h>
+ #include <linux/sched/mm.h>
+ #include <linux/sysctl.h>
++#include <linux/pagecache_limit.h>
+ #include <asm/pgalloc.h>
+ #include <asm/tlbflush.h>
+ #include "internal.h"
+@@ -973,6 +974,7 @@ int filemap_add_folio(struct address_space *mapping, struct folio *folio,
+ 	struct mem_cgroup *tmp;
+ 	bool kernel_file = test_bit(AS_KERNEL_FILE, &mapping->flags);
+ 
++	pagecache_limit_charge(mapping, folio, gfp);
+ 	if (kernel_file)
+ 		tmp = set_active_memcg(root_mem_cgroup);
+ 	ret = mem_cgroup_charge(folio, NULL, gfp);
+diff --git a/mm/pagecache_limit.c b/mm/pagecache_limit.c
+new file mode 100644
+index 000000000..994c6b8ea
+--- /dev/null
++++ b/mm/pagecache_limit.c
+@@ -0,0 +1,580 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Global page cache limit.
++ *
++ * Bounds the reclaimable file-backed page cache (the file LRUs) independently
++ * of the total memory size.  Written for WSL2, where every page the guest has
++ * touched stays committed in the host's vmmem process, so an unbounded page
++ * cache in the guest turns into memory pressure on the host.
++ *
++ * Two independent limits, both off (0) by default:
++ *
++ *  soft_limit  asynchronous: when the file LRUs grow past it, the kpclimitd
++ *              kthread reclaims file pages in the background until the cache
++ *              sits a little below the limit.
++ *  hard_limit  synchronous: while clean page cache is above it, a task adding
++ *              pages to the page cache first reclaims about as many file pages
++ *              as it adds (the memory.max model, applied to file pages only).
++ *
++ * Reclaim is the proactive memcg reclaim behind memory.reclaim, aimed at the
++ * root memory cgroup and without MEMCG_RECLAIM_MAY_SWAP, so it scans the file
++ * LRUs only and never touches anonymous memory or swap.
++ *
++ * The hard limit is best effort.  Dirty and writeback pages are excluded from
++ * it (direct reclaim cannot write them back; vm.dirty_bytes bounds them),
++ * contexts that must not block, recurse or do I/O skip it and only wake the
++ * worker, and a back-off gate keeps tasks from rescanning cache that cannot be
++ * freed.  No page cache allocation ever fails because of this file.
++ *
++ * Interface (built-in module parameters, also accepted on the command line):
++ *   pagecache_limit.soft_limit=<n>[KMGT]   bytes, 0 = off, otherwise >= 64M
++ *   pagecache_limit.hard_limit=<n>[KMGT]   bytes, 0 = off, otherwise >= 64M
++ *   /sys/module/pagecache_limit/parameters/{soft_limit,hard_limit,stats}
++ * A soft limit above the hard limit is treated as equal to it.
++ */
++#define pr_fmt(fmt) "pagecache_limit: " fmt
++
++#include <linux/atomic.h>
++#include <linux/cgroup.h>
++#include <linux/freezer.h>
++#include <linux/jiffies.h>
++#include <linux/kthread.h>
++#include <linux/memcontrol.h>
++#include <linux/minmax.h>
++#include <linux/mm.h>
++#include <linux/moduleparam.h>
++#include <linux/mutex.h>
++#include <linux/overflow.h>
++#include <linux/pagecache_limit.h>
++#include <linux/pagemap.h>
++#include <linux/percpu.h>
++#include <linux/psi.h>
++#include <linux/sched/mm.h>
++#include <linux/sched/signal.h>
++#include <linux/string.h>
++#include <linux/swap.h>
++#include <linux/vmstat.h>
++#include <linux/wait.h>
++
++#undef MODULE_PARAM_PREFIX
++#define MODULE_PARAM_PREFIX "pagecache_limit."
++
++#define PCL_MIN_BYTES		(64ULL << 20)
++#define PCL_MB(mb)		((unsigned long)(mb) << (20 - PAGE_SHIFT))
++
++/* Pages one CPU may add between two looks at the global counters. */
++#define PCL_CPU_BATCH		64U
++
++/* Sync back-off while reclaim cannot keep up: 20 ms, doubling up to 1 s. */
++#define PCL_SYNC_BACKOFF_MIN	msecs_to_jiffies(20)
++#define PCL_SYNC_BACKOFF_MAX	((unsigned long)HZ)
++
++/* Async worker batches and back-off (HZ/4, doubling up to 8 s). */
++#define PCL_ASYNC_BATCH_MIN	128UL
++#define PCL_ASYNC_BATCH_MAX	8192UL
++#define PCL_ASYNC_WEAK_ROUNDS	3
++#define PCL_ASYNC_BACKOFF_MIN	((unsigned long)HZ / 4)
++#define PCL_ASYNC_BACKOFF_MAX	(8UL * HZ)
++
++/* How often the worker re-checks while writeback may push clean over hard. */
++#define PCL_DRIFT_POLL		((unsigned long)HZ / 4)
++
++DEFINE_STATIC_KEY_FALSE(pagecache_limit_key);
++
++/* Limits in pages, 0 = off.  Written under pcl_mutex once ready. */
++static unsigned long pcl_soft;
++static unsigned long pcl_hard;
++
++enum pcl_state { PCL_BOOT, PCL_READY, PCL_UNAVAILABLE };
++static int pcl_state = PCL_BOOT;
++static DEFINE_MUTEX(pcl_mutex);
++static unsigned int pcl_generation;
++
++static DEFINE_PER_CPU(unsigned int, pcl_budget);
++
++static unsigned long pcl_sync_resume;		/* jiffies */
++static unsigned long pcl_sync_backoff;		/* jiffies, 0 = none */
++
++static struct task_struct *pcl_worker;
++static DECLARE_WAIT_QUEUE_HEAD(pcl_wait);
++static unsigned long pcl_flags;
++#define PCL_KICKED	0	/* there is cache to reclaim now */
++#define PCL_WATCH	1	/* above hard counting dirty: writeback may add clean excess */
++
++static struct {
++	atomic_long_t sync_calls;
++	atomic_long_t sync_reclaimed;
++	atomic_long_t sync_short;
++	atomic_long_t skip_context;
++	atomic_long_t skip_backoff;
++	atomic_long_t skip_cgroup_v1;
++	atomic_long_t async_wakeups;
++	atomic_long_t async_reclaimed;
++	atomic_long_t async_stuck;
++	atomic_long_t peak_file;		/* pages */
++} pcl_stat;
++
++static unsigned long pcl_file_pages(void)
++{
++	return global_node_page_state(NR_ACTIVE_FILE) +
++	       global_node_page_state(NR_INACTIVE_FILE);
++}
++
++static unsigned long pcl_clean_pages(unsigned long file)
++{
++	unsigned long unwritten = global_node_page_state(NR_FILE_DIRTY) +
++				  global_node_page_state(NR_WRITEBACK);
++
++	return file - min(file, unwritten);
++}
++
++static void pcl_read_limits(unsigned long *soft, unsigned long *hard)
++{
++	unsigned long s = READ_ONCE(pcl_soft);
++	unsigned long h = READ_ONCE(pcl_hard);
++
++	if (s && h && s > h)
++		s = h;
++	*soft = s;
++	*hard = h;
++}
++
++/*
++ * The only call into reclaim internals: file-only (no MEMCG_RECLAIM_MAY_SWAP)
++ * proactive reclaim over the whole memcg tree.
++ */
++static unsigned long pcl_reclaim(unsigned long nr_pages, gfp_t gfp)
++{
++	return try_to_free_mem_cgroup_pages(root_mem_cgroup, nr_pages, gfp,
++					    MEMCG_RECLAIM_PROACTIVE, NULL);
++}
++
++/* Set @bit and wake the worker, only on a 0 -> 1 transition. */
++static bool pcl_signal(int bit)
++{
++	if (!READ_ONCE(pcl_worker) || test_bit(bit, &pcl_flags) ||
++	    test_and_set_bit(bit, &pcl_flags))
++		return false;
++	wake_up_interruptible(&pcl_wait);
++	return true;
++}
++
++static void pcl_kick(void)
++{
++	if (pcl_signal(PCL_KICKED))
++		atomic_long_inc(&pcl_stat.async_wakeups);
++}
++
++static bool pcl_sync_allowed(const struct folio *folio, gfp_t gfp)
++{
++	if (!gfpflags_allow_blocking(gfp) || (gfp & __GFP_NOFAIL) ||
++	    !in_task() ||
++	    (current->flags & (PF_MEMALLOC | PF_KTHREAD | PF_MEMALLOC_NOIO)) ||
++	    fatal_signal_pending(current) || folio_test_dropbehind(folio)) {
++		atomic_long_inc(&pcl_stat.skip_context);
++		return false;
++	}
++	/* cgroup v1 reclaim waits on writeback instead of throttling. */
++	if (!cgroup_subsys_on_dfl(memory_cgrp_subsys)) {
++		atomic_long_inc(&pcl_stat.skip_cgroup_v1);
++		return false;
++	}
++	if (time_before(jiffies, READ_ONCE(pcl_sync_resume))) {
++		atomic_long_inc(&pcl_stat.skip_backoff);
++		return false;
++	}
++	return true;
++}
++
++static void pcl_sync_reclaim(unsigned long nr, gfp_t gfp)
++{
++	unsigned long reclaimed, backoff, pflags;
++
++	psi_memstall_enter(&pflags);
++	fs_reclaim_acquire(gfp);
++	reclaimed = pcl_reclaim(nr, gfp);
++	fs_reclaim_release(gfp);
++	psi_memstall_leave(&pflags);
++
++	atomic_long_inc(&pcl_stat.sync_calls);
++	atomic_long_add(reclaimed, &pcl_stat.sync_reclaimed);
++
++	if (reclaimed >= nr / 2) {
++		if (READ_ONCE(pcl_sync_backoff))
++			WRITE_ONCE(pcl_sync_backoff, 0);
++		return;
++	}
++
++	/* Mostly unreclaimable cache: stop rescanning it for a while. */
++	atomic_long_inc(&pcl_stat.sync_short);
++	backoff = READ_ONCE(pcl_sync_backoff);
++	backoff = backoff ? min(backoff * 2, PCL_SYNC_BACKOFF_MAX) :
++			    PCL_SYNC_BACKOFF_MIN;
++	WRITE_ONCE(pcl_sync_backoff, backoff);
++	WRITE_ONCE(pcl_sync_resume, jiffies + backoff);
++	pcl_kick();
++}
++
++void __pagecache_limit_charge(struct address_space *mapping,
++			      struct folio *folio, gfp_t gfp)
++{
++	unsigned long soft, hard, file, nr;
++
++	if (mapping_unevictable(mapping))
++		return;
++	if (this_cpu_add_return(pcl_budget, folio_nr_pages(folio)) <
++	    PCL_CPU_BATCH)
++		return;
++	nr = this_cpu_xchg(pcl_budget, 0);
++	if (!nr)
++		return;
++
++	pcl_read_limits(&soft, &hard);
++	file = pcl_file_pages();
++	if (file > (unsigned long)atomic_long_read(&pcl_stat.peak_file))
++		atomic_long_set(&pcl_stat.peak_file, file);
++
++	if (soft && file > soft)
++		pcl_kick();
++	if (!hard || file <= hard)
++		return;
++	/*
++	 * Above the hard limit counting dirty pages.  Inserters only reclaim
++	 * what they add, and writeback turns dirty pages clean without any
++	 * insertion, so the worker watches and clears what inserters do not.
++	 */
++	pcl_signal(PCL_WATCH);
++	if (pcl_clean_pages(file) <= hard)
++		return;
++	pcl_kick();
++	if (pcl_sync_allowed(folio, gfp))
++		pcl_sync_reclaim(max_t(unsigned long, nr, SWAP_CLUSTER_MAX), gfp);
++}
++
++/* Pages the worker should reclaim now, 0 when nothing is over a limit. */
++static unsigned long pcl_async_excess(void)
++{
++	unsigned long soft, hard, file, slack, target, clean;
++
++	pcl_read_limits(&soft, &hard);
++	file = pcl_file_pages();
++	if (soft) {
++		slack = clamp(soft / 32, PCL_MB(16), PCL_MB(256));
++		target = soft > slack ? soft - slack : 0;
++		return file > target ? file - target : 0;
++	}
++	if (hard) {
++		clean = pcl_clean_pages(file);
++		return clean > hard ? clean - hard : 0;
++	}
++	return 0;
++}
++
++/*
++ * True while the file LRUs, dirty pages included, are above the hard limit:
++ * writeback can then push clean cache over the limit with no insertion that
++ * would notice it.
++ */
++static bool pcl_may_drift(void)
++{
++	unsigned long hard = READ_ONCE(pcl_hard);
++
++	return hard && pcl_file_pages() > hard;
++}
++
++/* Returns false when reclaim stopped making progress short of the target. */
++static bool pcl_async_round(void)
++{
++	unsigned int weak = 0;
++	unsigned long excess, batch, got;
++
++	while ((excess = pcl_async_excess())) {
++		if (kthread_should_stop())
++			return true;
++		batch = clamp(excess / 4, PCL_ASYNC_BATCH_MIN,
++			      PCL_ASYNC_BATCH_MAX);
++		got = pcl_reclaim(batch, GFP_KERNEL);
++		atomic_long_add(got, &pcl_stat.async_reclaimed);
++		if (got < batch / 8) {
++			if (++weak >= PCL_ASYNC_WEAK_ROUNDS)
++				return false;
++		} else {
++			weak = 0;
++		}
++		cond_resched();
++		try_to_freeze();
++	}
++	return true;
++}
++
++/* End of a watch interval: stop, clean excess seen, or a limit changed. */
++static bool pcl_watch_done(unsigned int gen)
++{
++	return kthread_should_stop() || test_bit(PCL_KICKED, &pcl_flags) ||
++	       READ_ONCE(pcl_generation) != gen;
++}
++
++static int pcl_worker_fn(void *unused)
++{
++	unsigned long backoff = 0;
++	unsigned int gen;
++
++	set_freezable();
++	while (!kthread_should_stop()) {
++		wait_event_freezable(pcl_wait,
++				     test_bit(PCL_KICKED, &pcl_flags) ||
++				     test_bit(PCL_WATCH, &pcl_flags) ||
++				     kthread_should_stop());
++		if (kthread_should_stop())
++			break;
++
++		if (pcl_async_round()) {
++			backoff = 0;
++			clear_bit(PCL_KICKED, &pcl_flags);
++			/*
++			 * Order the clear against re-reading the counters: an
++			 * inserter that saw the bit still set before the clear
++			 * skipped its wake-up, so its growth is caught here.
++			 */
++			smp_mb__after_atomic();
++			if (pcl_async_excess())
++				set_bit(PCL_KICKED, &pcl_flags);
++
++			if (!pcl_may_drift()) {
++				clear_bit(PCL_WATCH, &pcl_flags);
++				smp_mb__after_atomic();	/* same pairing as above */
++				if (pcl_may_drift())
++					set_bit(PCL_WATCH, &pcl_flags);
++				continue;
++			}
++			/*
++			 * Dirty and writeback pages above the hard limit turn
++			 * clean without insertions: keep watching, re-check
++			 * shortly or as soon as an inserter sees clean excess.
++			 */
++			set_bit(PCL_WATCH, &pcl_flags);
++			gen = READ_ONCE(pcl_generation);
++			wait_event_freezable_timeout(pcl_wait, pcl_watch_done(gen),
++						     PCL_DRIFT_POLL);
++			continue;
++		}
++
++		/*
++		 * Stuck (mapped, locked, dirty or protected cache): stay KICKED
++		 * so the hot path does not wake us, and retry later or as soon
++		 * as a limit changes.
++		 */
++		set_bit(PCL_KICKED, &pcl_flags);
++		atomic_long_inc(&pcl_stat.async_stuck);
++		backoff = backoff ? min(backoff * 2, PCL_ASYNC_BACKOFF_MAX) :
++				    PCL_ASYNC_BACKOFF_MIN;
++		gen = READ_ONCE(pcl_generation);
++		wait_event_freezable_timeout(pcl_wait,
++					     kthread_should_stop() ||
++					     READ_ONCE(pcl_generation) != gen,
++					     backoff);
++	}
++	return 0;
++}
++
++/* Called with pcl_mutex held, after initialisation. */
++static void pcl_apply_locked(void)
++{
++	bool on = READ_ONCE(pcl_soft) || READ_ONCE(pcl_hard);
++
++	WRITE_ONCE(pcl_sync_backoff, 0);
++	WRITE_ONCE(pcl_sync_resume, jiffies);
++	WRITE_ONCE(pcl_generation, pcl_generation + 1);
++
++	if (on && !static_key_enabled(&pagecache_limit_key))
++		static_branch_enable(&pagecache_limit_key);
++	else if (!on && static_key_enabled(&pagecache_limit_key))
++		static_branch_disable(&pagecache_limit_key);
++
++	if (on && pcl_worker) {
++		set_bit(PCL_KICKED, &pcl_flags);
++		wake_up_interruptible(&pcl_wait);
++	}
++}
++
++static int pcl_parse_bytes(const char *val, u64 *bytes)
++{
++	char buf[24];
++	unsigned int shift = 0;
++	size_t len;
++	u64 v;
++	int ret;
++
++	if (!val)
++		return -EINVAL;
++	len = strlen(val);
++	if (len && val[len - 1] == '\n')
++		len--;
++	if (!len || len >= sizeof(buf))
++		return -EINVAL;
++	memcpy(buf, val, len);
++	buf[len] = '\0';
++
++	switch (buf[len - 1]) {
++	case 'k': case 'K':
++		shift = 10;
++		break;
++	case 'm': case 'M':
++		shift = 20;
++		break;
++	case 'g': case 'G':
++		shift = 30;
++		break;
++	case 't': case 'T':
++		shift = 40;
++		break;
++	}
++	if (shift) {
++		buf[--len] = '\0';
++		if (!len)
++			return -EINVAL;
++	}
++
++	ret = kstrtou64(buf, 10, &v);
++	if (ret)
++		return ret;
++	if (check_shl_overflow(v, shift, bytes))
++		return -ERANGE;
++	return 0;
++}
++
++static int pcl_limit_set(const char *val, const struct kernel_param *kp)
++{
++	unsigned long *limit = kp->arg;
++	unsigned long pages;
++	u64 bytes;
++	int ret;
++
++	ret = pcl_parse_bytes(val, &bytes);
++	if (ret)
++		return ret;
++	if (bytes && bytes < PCL_MIN_BYTES)
++		return -EINVAL;
++	pages = bytes >> PAGE_SHIFT;
++	if ((u64)pages != bytes >> PAGE_SHIFT)
++		return -ERANGE;
++
++	/*
++	 * Command line parsing runs single-threaded long before the late
++	 * initcall below and before root_mem_cgroup exists: only store.
++	 */
++	if (READ_ONCE(pcl_state) == PCL_BOOT) {
++		WRITE_ONCE(*limit, pages);
++		return 0;
++	}
++
++	mutex_lock(&pcl_mutex);
++	if (pcl_state == PCL_UNAVAILABLE) {
++		ret = pages ? -ENODEV : 0;
++	} else {
++		WRITE_ONCE(*limit, pages);
++		pcl_apply_locked();
++	}
++	mutex_unlock(&pcl_mutex);
++	return ret;
++}
++
++static int pcl_limit_get(char *buf, const struct kernel_param *kp)
++{
++	unsigned long pages = READ_ONCE(*(unsigned long *)kp->arg);
++
++	return scnprintf(buf, PAGE_SIZE, "%llu\n",
++			 (unsigned long long)pages << PAGE_SHIFT);
++}
++
++static int pcl_stats_set(const char *val, const struct kernel_param *kp)
++{
++	return -EINVAL;
++}
++
++static int pcl_stats_get(char *buf, const struct kernel_param *kp)
++{
++	unsigned long soft, hard, file = pcl_file_pages();
++
++	pcl_read_limits(&soft, &hard);
++	return scnprintf(buf, PAGE_SIZE,
++		"file_bytes %llu\n"
++		"clean_bytes %llu\n"
++		"peak_file_bytes %llu\n"
++		"effective_soft_bytes %llu\n"
++		"hard_bytes %llu\n"
++		"sync_calls %ld\n"
++		"sync_reclaimed_pages %ld\n"
++		"sync_short %ld\n"
++		"skip_context %ld\n"
++		"skip_backoff %ld\n"
++		"skip_cgroup_v1 %ld\n"
++		"async_wakeups %ld\n"
++		"async_reclaimed_pages %ld\n"
++		"async_stuck %ld\n",
++		(unsigned long long)file << PAGE_SHIFT,
++		(unsigned long long)pcl_clean_pages(file) << PAGE_SHIFT,
++		(unsigned long long)atomic_long_read(&pcl_stat.peak_file)
++			<< PAGE_SHIFT,
++		(unsigned long long)soft << PAGE_SHIFT,
++		(unsigned long long)hard << PAGE_SHIFT,
++		atomic_long_read(&pcl_stat.sync_calls),
++		atomic_long_read(&pcl_stat.sync_reclaimed),
++		atomic_long_read(&pcl_stat.sync_short),
++		atomic_long_read(&pcl_stat.skip_context),
++		atomic_long_read(&pcl_stat.skip_backoff),
++		atomic_long_read(&pcl_stat.skip_cgroup_v1),
++		atomic_long_read(&pcl_stat.async_wakeups),
++		atomic_long_read(&pcl_stat.async_reclaimed),
++		atomic_long_read(&pcl_stat.async_stuck));
++}
++
++static const struct kernel_param_ops pcl_limit_ops = {
++	.set = pcl_limit_set,
++	.get = pcl_limit_get,
++};
++
++static const struct kernel_param_ops pcl_stats_ops = {
++	.set = pcl_stats_set,
++	.get = pcl_stats_get,
++};
++
++module_param_cb(soft_limit, &pcl_limit_ops, &pcl_soft, 0644);
++MODULE_PARM_DESC(soft_limit, "Async page cache limit in bytes (K/M/G/T suffix), 0 = off");
++module_param_cb(hard_limit, &pcl_limit_ops, &pcl_hard, 0644);
++MODULE_PARM_DESC(hard_limit, "Sync clean page cache limit in bytes (K/M/G/T suffix), 0 = off");
++module_param_cb(stats, &pcl_stats_ops, NULL, 0444);
++MODULE_PARM_DESC(stats, "Read-only counters");
++
++static int __init pcl_init(void)
++{
++	struct task_struct *worker;
++
++	mutex_lock(&pcl_mutex);
++	if (mem_cgroup_disabled()) {
++		if (pcl_soft || pcl_hard)
++			pr_warn("memory cgroup disabled, limits ignored\n");
++		WRITE_ONCE(pcl_soft, 0);
++		WRITE_ONCE(pcl_hard, 0);
++		WRITE_ONCE(pcl_state, PCL_UNAVAILABLE);
++		mutex_unlock(&pcl_mutex);
++		return 0;
++	}
++
++	worker = kthread_run(pcl_worker_fn, NULL, "kpclimitd");
++	if (IS_ERR(worker))
++		pr_warn("kpclimitd not started (%ld), only the hard limit works\n",
++			PTR_ERR(worker));
++	else
++		WRITE_ONCE(pcl_worker, worker);
++
++	WRITE_ONCE(pcl_state, PCL_READY);
++	pcl_apply_locked();
++	mutex_unlock(&pcl_mutex);
++
++	pr_info("soft_limit=%luM hard_limit=%luM\n",
++		READ_ONCE(pcl_soft) >> (20 - PAGE_SHIFT),
++		READ_ONCE(pcl_hard) >> (20 - PAGE_SHIFT));
++	return 0;
++}
++late_initcall(pcl_init);

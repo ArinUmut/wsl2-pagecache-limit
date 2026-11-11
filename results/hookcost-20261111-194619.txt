@@ -1,0 +1,5 @@
+# kernel=6.18.58.1-microsoft-standard-WSL2-pclimit reps=7 file=2GiB on loop(ext4 in tmpfs), modes interleaved
+off MBps  runs: 10716 4367 11780 4505 4189 11665 12065 
+on-under MBps  runs: 11030 11767 11878 11865 11392 12037 12174 
+soft-over MBps  runs: 11098 11564 9456 11924 12085 11703 11917 
+hard-over MBps  runs: 9057 9639 8878 6959 9824 9766 7591 

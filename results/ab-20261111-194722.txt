@@ -1,0 +1,13 @@
+round 1 off read=2666MB/s write=778MB/s
+round 1 on read=4554MB/s write=996MB/s
+round 2 off read=2931MB/s write=869MB/s
+round 2 on read=4618MB/s write=912MB/s
+round 3 off read=2297MB/s write=449MB/s
+round 3 on read=2290MB/s write=207MB/s
+round 4 off read=1603MB/s write=173MB/s
+round 4 on read=2685MB/s write=284MB/s
+round 5 off read=2011MB/s write=142MB/s
+round 5 on read=1244MB/s write=85MB/s
+# kernel=6.18.58.1-microsoft-standard-WSL2-pclimit on=3G/4G N=5
+read off: 
+read on: 
