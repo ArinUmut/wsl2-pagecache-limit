@@ -1,22 +1,8 @@
-# Merged over Microsoft/config-wsl by scripts/build.sh.
+# Merged over Microsoft/config-wsl by scripts/build.sh. Machine-specific
+# options go in config/local.fragment (git-ignored), with the differences they
+# cause listed in config/local-allowed-diff.txt.
 #
-# 1) KVM and vhost built in, for nested VMs (e.g. Firecracker) inside WSL.
-#    VHOST_NET can only be =m: it depends on (TUN || !TUN) and WSL builds TUN
-#    as a module.
-CONFIG_KVM=y
-CONFIG_KVM_AMD=y
-CONFIG_VHOST=y
-CONFIG_VHOST_NET=m
-CONFIG_VHOST_VSOCK=y
-CONFIG_VSOCKETS=y
-CONFIG_NAMESPACES=y
-CONFIG_USER_NS=y
-CONFIG_CGROUPS=y
-CONFIG_CGROUP_BPF=y
-CONFIG_OVERLAY_FS=y
-CONFIG_BLK_DEV_LOOP=y
-#
-# 2) Hardening beyond Microsoft's config-wsl. RANDSTRUCT is deliberately left
+# 1) Hardening beyond Microsoft's config-wsl. RANDSTRUCT is deliberately left
 #    off: the GCC randstruct plugin disables DEBUG_INFO_BTF
 #    (lib/Kconfig.debug: depends on !GCC_PLUGIN_RANDSTRUCT), and BTF is needed
 #    by CO-RE BPF tools, sched_ext and systemd BPF features.
@@ -25,6 +11,6 @@ CONFIG_GCC_PLUGINS=y
 CONFIG_GCC_PLUGIN_LATENT_ENTROPY=y
 CONFIG_DEBUG_INFO_BTF=y
 #
-# 3) The page cache limit itself has no Kconfig symbol: mm/pagecache_limit.o
+# 2) The page cache limit itself has no Kconfig symbol: mm/pagecache_limit.o
 #    is built whenever CONFIG_MEMCG=y and stays off until a limit is set.
 CONFIG_MEMCG=y

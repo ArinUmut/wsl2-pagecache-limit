@@ -22,8 +22,8 @@ param(
     [string]$Tag,
     [string]$Soft = '3G',
     [string]$Hard = '4G',
-    [string]$Distro = 'Ubuntu-24.04',
-    [string]$RepoLinux = '/root/work/wsl2-pagecache-limit',
+    [string]$Distro,
+    [string]$RepoLinux,
     [string]$KernelRoot = (Join-Path $env:USERPROFILE '.wsl-kernels'),
     [switch]$Apply
 )
@@ -31,6 +31,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $env:WSL_UTF8 = '1'
+
+# Distro and repo path default to where this script lives: \\wsl.localhost\<distro>\<repo>\scripts
+if (-not $Distro -or -not $RepoLinux) {
+    $m = [regex]::Match($PSScriptRoot, '^\\\\wsl(?:\.localhost|\$)\\([^\\]+)(\\.+)\\scripts$', 'IgnoreCase')
+    if (-not $m.Success) { throw 'Run from the repo inside WSL (\\wsl.localhost\<distro>\...\scripts) or pass -Distro and -RepoLinux.' }
+    if (-not $Distro) { $Distro = $m.Groups[1].Value }
+    if (-not $RepoLinux) { $RepoLinux = $m.Groups[2].Value.Replace('\', '/') }
+}
 
 function Assert-Size([string]$Value, [string]$Name) {
     if ($Value -notmatch '^[0-9]+[KkMmGgTt]?$') { throw "$Name must look like 0, 512M, 3G (got '$Value')." }

@@ -56,8 +56,9 @@ Persistent change from Windows, without a restart:
 .\scripts\set-limits.ps1 -Soft 0 -Hard 0
 ```
 
-The Windows scripts expect the repo at `/root/work/wsl2-pagecache-limit` in distro
-`Ubuntu-24.04`. Override with `-RepoLinux` and `-Distro`.
+Run the Windows scripts from the repo inside WSL (`\\wsl.localhost\<distro>\...`); they
+derive the distro and repo path from their own location. `-Distro` and `-RepoLinux`
+override that.
 
 ## Build, test, install
 
@@ -74,23 +75,25 @@ tests/qemu/run.sh                   # QEMU/KVM suite on the debug kernel, 10 min
 
 Kernel config is `Microsoft/config-wsl` plus `config/pclimit.fragment`:
 
-- KVM, KVM_AMD, VHOST and VHOST_VSOCK built in, for nested VMs. VHOST_NET stays `=m`
-  because it depends on TUN, which is a module.
 - `GCC_PLUGIN_LATENT_ENTROPY=y`.
 - RANDSTRUCT off, because the GCC plugin disables `DEBUG_INFO_BTF`.
+- Machine-specific options go in `config/local.fragment` (git-ignored), with the
+  differences they cause listed in `config/local-allowed-diff.txt`.
 - `build.sh` fails if a fragment line is not honoured, or if `.config` differs from
-  config-wsl outside `config/allowed-diff.txt`.
+  config-wsl outside the allowed lists.
 
-## Updating to a new Microsoft kernel
+## Compatibility
 
-```bash
-scripts/check-update.sh                             # exit 10: newer tag; "RETEST REQUIRED" if relevant config or functions changed
-scripts/build.sh --tag <tag> && tests/qemu/run.sh
-```
+- **Minimum kernel:** Linux 6.18; for WSL, `linux-msft-wsl-6.18.20.1`, the first
+  6.18-based WSL tag. The patch uses `folio_test_dropbehind()` (6.14) and hooks
+  `filemap_add_folio()` in its 6.18 form; 6.6-based WSL kernels are not supported.
+- **Checked:** applies cleanly to 6.18.20.1, 6.18.33.2, 6.18.54.1 and 6.18.58.1;
+  compiles warning-free (`W=1`) on 6.18.20.1 and 6.18.58.1; built, tested and
+  installed on 6.18.58.1.
+- **WSL:** tested with 3.0.5.
 
-The patch is applied to `patches/BASE_TAG` with `git am`, then moved with
-`git rebase --onto`; a conflict stops the build. After porting by hand, run
-`scripts/export-patch.sh` and update `BASE_TAG`.
+`scripts/build.sh --tag <tag>` builds for another 6.18.y tag; `scripts/check-update.sh`
+reports newer tags and changes in the kernel code the patch relies on.
 
 ## Results
 
@@ -126,12 +129,9 @@ hung-task reports.
 
 | Case | Result |
 |---|---|
-| limits off vs stock 6.18.40.1 (fio, median of 3) | seqread 4859 → 5244 MB/s, randread 23035 → 23519 IOPS, seqwrite 509 → 534 MB/s, syscall 0.124 → 0.123 µs, sched messaging 1.314 → 1.346 s |
+| limits off vs 6.18.40.1 without the patch (fio, median of 3) | seqread 4859 → 5244 MB/s, randread 23035 → 23519 IOPS, seqwrite 509 → 534 MB/s, syscall 0.124 → 0.123 µs, sched messaging 1.314 → 1.346 s |
 | hook cost, RAM-backed (ext4 on loop on tmpfs, 2 GiB cold read, 7 interleaved runs) | off 10716, enabled below limit 11865, soft exceeded 11703, hard exceeded 9057 MB/s |
 | VHDX A/B, 5 interleaved rounds | dominated by host-side variance (85–996 MB/s writes in one session); paired on/off median ratio: read 1.58, write 1.05 |
-
-**Rebase:** the patch applies cleanly to 6.18.33.2 and 6.18.54.1 with `git rebase --onto`.
-
 ## Notes
 
 - **Total cache bound:** total cache is bounded by `hard_limit + vm.dirty_bytes`;
@@ -144,7 +144,8 @@ hung-task reports.
 ## Requirements
 
 - **Runtime:** WSL2 with Ubuntu 24.04; scripts run as root inside WSL.
-- **Build:** `build-essential flex bison bc dwarves libelf-dev libssl-dev cpio qemu-utils rsync gcc-13-plugin-dev`.
+- **Build:** `build-essential flex bison bc dwarves libelf-dev libssl-dev cpio qemu-utils rsync`,
+  plus `gcc-<N>-plugin-dev` for the installed gcc major version.
 - **Tests:** `qemu-system-x86 busybox-static fio`, `sparse` optional. QEMU tests need
   `/dev/kvm` inside WSL.
 
@@ -153,7 +154,7 @@ hung-task reports.
 | Path | Contents |
 |---|---|
 | `patches/` | kernel patch and its base tag |
-| `config/` | config fragments, allowed config differences, dirty-page sysctl |
+| `config/` | config fragments, allowed config differences, dirty-page sysctl; optional git-ignored `local.fragment` and `local-allowed-diff.txt` |
 | `scripts/` | fetch, build, export-patch, check-update, install, rollback, set-limits, pclimit |
 | `tests/qemu/` | test VM init, static I/O helper (`pcltest.c`), runner |
 | `tests/` | install gates (`validate.sh`, plus optional git-ignored `validate.local.sh`), functional, hard-only, perf, A/B, hook-cost, counter diagnostics, host memory |

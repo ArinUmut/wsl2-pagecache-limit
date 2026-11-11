@@ -1,3 +1,5 @@
 /.cache/
 /out/
 /tests/validate.local.sh
+/config/local.fragment
+/config/local-allowed-diff.txt

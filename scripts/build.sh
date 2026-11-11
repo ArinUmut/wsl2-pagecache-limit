@@ -14,9 +14,12 @@
 #   modules.vhdx           Microsoft/scripts/gen_artifacts_vhdx.sh image (release only)
 #   diffconfig.txt BUILDINFO SHA256SUMS
 #
+# Config: Microsoft/config-wsl + config/pclimit.fragment + config/local.fragment
+# (optional, git-ignored) + config/debug.fragment (debug variant only).
 # The release variant must pass the config gate: every fragment line is
 # honoured, and every difference from Microsoft/config-wsl is listed in
-# config/allowed-diff.txt (so a silently dropped option fails the build).
+# config/allowed-diff.txt or config/local-allowed-diff.txt (so a silently
+# dropped option fails the build).
 set -Eeuo pipefail
 IFS=$'\n\t'
 
@@ -42,7 +45,7 @@ for tool in git make gcc flex bison pahole qemu-img mke2fs sha256sum bc; do
   command -v "$tool" >/dev/null 2>&1 || die "missing build tool: $tool"
 done
 [[ -e "$(gcc -print-file-name=plugin)/include/plugin-version.h" ]] ||
-  die "GCC plugin headers missing (apt install gcc-$(gcc -dumpversion | cut -d. -f1)-plugin-dev); RANDSTRUCT/LATENT_ENTROPY need them"
+  die "GCC plugin headers missing (apt install gcc-$(gcc -dumpversion | cut -d. -f1)-plugin-dev); LATENT_ENTROPY needs them"
 compgen -G "$ROOT/patches/*.patch" >/dev/null || die "no patches in $ROOT/patches"
 
 OUT="$ROOT/out/$TAG-$VARIANT"
@@ -78,6 +81,7 @@ mkdir -p "$OUT/build"
 sed "s/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION=\"-microsoft-standard-WSL2$LOCALVER_SUFFIX\"/" \
   "$SRC/Microsoft/config-wsl" > "$OUT/build/.config"
 frags=("$ROOT/config/pclimit.fragment")
+[[ -f "$ROOT/config/local.fragment" ]] && frags+=("$ROOT/config/local.fragment")
 [[ "$VARIANT" == debug ]] && frags+=("$ROOT/config/debug.fragment")
 (cd "$SRC" && bash scripts/kconfig/merge_config.sh -m -O "$OUT/build" "$OUT/build/.config" "${frags[@]}") >/dev/null
 "${MAKE[@]}" -s olddefconfig
@@ -95,10 +99,13 @@ for frag in "${frags[@]}"; do
 done
 python3 -I "$SRC/scripts/diffconfig" "$SRC/Microsoft/config-wsl" "$OUT/build/.config" > "$OUT/diffconfig.txt"
 if [[ "$VARIANT" == release ]]; then
+  allow_files=("$ROOT/config/allowed-diff.txt")
+  [[ -f "$ROOT/config/local-allowed-diff.txt" ]] && allow_files+=("$ROOT/config/local-allowed-diff.txt")
+  allowed="$(cat "${allow_files[@]}" | grep -v '^#' | sed '/^$/d')"
   bad=0
   while IFS= read -r d; do
     sym="$(sed -E 's/^[-+ ]?([A-Za-z0-9_]+).*/\1/' <<<"$d")"
-    grep -qxF -- "$sym" <(grep -v '^#' "$ROOT/config/allowed-diff.txt" | sed '/^$/d') || { echo "unexpected config difference: $d" >&2; bad=1; }
+    grep -qxF -- "$sym" <<<"$allowed" || { echo "unexpected config difference: $d" >&2; bad=1; }
   done < "$OUT/diffconfig.txt"
   ((bad == 0)) || die "config gate failed (see $OUT/diffconfig.txt; extend config/allowed-diff.txt only after review)"
 fi

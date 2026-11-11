@@ -41,8 +41,6 @@ gate blocking "kernel release $release" test "$(uname -r)" = "$release"
 gate blocking "systemd is PID 1" test "$(ps -p 1 -o comm= | tr -d '[:space:]')" = systemd
 gate blocking "/mnt/c readable" test -d /mnt/c/Users
 gate blocking "DNS" getent hosts github.com
-gate blocking "GPU visible (nvidia-smi)" nvidia-smi -L
-gate blocking "/dev/kvm present" test -c /dev/kvm
 gate blocking "BTF present" test -r /sys/kernel/btf/vmlinux
 gate blocking "soft_limit = $soft" test "$(cat $P/soft_limit)" = "$(bytes "$soft")"
 gate blocking "hard_limit = $hard" test "$(cat $P/hard_limit)" = "$(bytes "$hard")"

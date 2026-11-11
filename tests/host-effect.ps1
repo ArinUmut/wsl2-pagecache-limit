@@ -14,13 +14,21 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Distro = 'Ubuntu-24.04',
-    [string]$RepoLinux = '/root/work/wsl2-pagecache-limit',
+    [string]$Distro,
+    [string]$RepoLinux,
     [int]$SettleSeconds = 20
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $env:WSL_UTF8 = '1'
+
+# Distro and repo path default to where this script lives: \\wsl.localhost\<distro>\<repo>\tests
+if (-not $Distro -or -not $RepoLinux) {
+    $m = [regex]::Match($PSScriptRoot, '^\\\\wsl(?:\.localhost|\$)\\([^\\]+)(\\.+)\\tests$', 'IgnoreCase')
+    if (-not $m.Success) { throw 'Run from the repo inside WSL (\\wsl.localhost\<distro>\...\tests) or pass -Distro and -RepoLinux.' }
+    if (-not $Distro) { $Distro = $m.Groups[1].Value }
+    if (-not $RepoLinux) { $RepoLinux = $m.Groups[2].Value.Replace('\', '/') }
+}
 
 function Wsl([string]$cmd) {
     $o = & wsl.exe -d $Distro -u root --exec bash -c $cmd 2>&1

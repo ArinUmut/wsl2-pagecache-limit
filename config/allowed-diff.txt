@@ -1,18 +1,10 @@
 # Symbols allowed to differ between Microsoft/config-wsl and the release
 # .config (scripts/build.sh fails on any other difference). Review the reason
-# before adding a line.
+# before adding a line. Differences caused by config/local.fragment belong in
+# config/local-allowed-diff.txt (git-ignored).
 #
-# Our choices (config/pclimit.fragment) and what they select:
+# Our choices (config/pclimit.fragment):
 LOCALVERSION
-KVM
-KVM_X86
-KVM_AMD
-HAVE_KVM_IRQ_BYPASS
-IRQ_BYPASS_MANAGER
-VHOST
-VHOST_IOTLB
-VHOST_VSOCK
-VIRTIO_VSOCKETS_COMMON
 GCC_PLUGIN_LATENT_ENTROPY
 #
 # Toolchain probes (Microsoft builds with gcc 13.2.0, we build with the
